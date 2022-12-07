@@ -1,0 +1,383 @@
+---
+title             : "Predicting Avocado Prices with Different Models"
+shorttitle        : "Predicting Avocado Prices"
+author: 
+  - name          : "Rebecca Gordon"
+    affiliation   : "1"
+    corresponding : yes    # Define only one corresponding author
+    email         : "rebeccag@uoregon.edu"
+affiliation:
+  - id            : "1"
+    institution   : "University of Oregon"
+bibliography: references.bib
+note: 
+floatsintext      : yes
+figurelist        : no
+tablelist         : no
+footnotelist      : no
+linenumbers       : yes
+mask              : no
+draft             : no
+documentclass     : "apa7"
+classoption       : "man"
+output            : papaja::apa6_pdf
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+											message=FALSE, 
+											warning=FALSE)
+											
+library("papaja")
+library(psych)
+library(rpart)
+library(finalfit)
+library(tidyverse); theme_set(theme_minimal())
+library(lubridate)
+library(psych)
+library(janitor)
+library(caret)
+library(kableExtra)
+```
+
+## The outcome variable
+
+Across the entire United States, avocados are being sold everyday despite their fluctuating price. Our goal for this project was to create a machine learning model capable of accurately predicting a given state's avocado price over time across states based on. Avocado prices vary based on type (i.e., conventional vs. organic).
+
+We will be answering the research question: What is the strongest predictor of avocado prices in the United States? Thus, our goal is to find the feature that most strongly predicts the price of avocados in the United States. The purpose of this project is to provide consumers, local grocers, and farmer's markets with a tool to predict avocado prices.
+
+# Description of the Data
+
+## Core features and descriptive statistics
+
+We analyzed the avocado prices dataset retrieved from Kaggle and compiled by the Hass Avocado Board. The dataset consists of approximately 18,000 records over 4 years (2015 - 2018). The dataset contains information about avocado prices by type (organic or conventional), region purchased in the United States, total volume sold, and date sold.
+
+```{r data-wrangling}
+avocado <- read_csv("avocado.csv")
+avocado <- avocado %>% mutate(Date = ymd(Date))
+#str(avocado)
+
+#clean names
+avocado <- clean_names(avocado)
+#head(avocado)
+
+
+# Subset data by region
+avocado_regional <- avocado %>%
+  filter(region %in% c( "West", "SouthCentral", "TotalUS",
+                       "Midsouth", "Southeast", "Northeast")) 
+
+# Dataset for entire US
+avocado_total <- avocado %>%
+  filter(region == "TotalUS")
+
+```
+
+```{r subset-data, echo=FALSE}
+df <- avocado %>% dplyr::select(date, type, average_price, total_volume, region)
+```
+
+# Frequencies and distribution of data
+
+First, we subsetted the variables of interest from the dataset. From the histogram below, we can see that our outcome variable, average price, is normally distributed. Mean price across data was \$1.41 (*SD* = \$0.4). The highest average price for organic avocados was in San Francisco, CA in 2016 for \$3.25 and the lowest average price was in Cincinnati, OH in 2017 for \$0.44.
+
+```{r table, fig.wifth = 15, fig.height = 15, echo=FALSE}
+
+describe(df) %>%
+  kable("latex",caption = "Frequencies of the data", digits = 2, longtable = T, booktabs=TRUE)  %>% 
+  kable_styling(latex_options="scale_down", font_size = 7)
+
+
+ggplot(avocado, aes(x = desc(average_price))) + 
+	geom_histogram(bins = 60, aes(fill = type)) +
+	scale_fill_manual(values = c("#356211", "#ffc324")) +
+scale_x_continuous(labels = scales::dollar) +
+	facet_wrap(~type) +
+	labs(title = "Distribution of average price by type (conventional vs. organic) by region",
+			 x = "Average Price",
+			 y = "") +
+	facet_wrap(~region)
+
+```
+
+## Missing data check
+
+```{r missing-data-check}
+#Check for missing data
+sapply(avocado, function(x)sum(is.na(x)))
+```
+
+No missingness was found for the variables in the dataset.
+
+## Description of the models
+
+Three different modeling approaches will be used to predict avocado price from sale features, including: Linear Regression, Decision Trees, and Random Forest. Since the purpose of this project is to provide consumers, local grocers, and farmer's markets with a tool to predict avocado prices, we want to examine the predictive power of several features that contribute to avocado price. Thus, we first examined the effect of all predictors in a linear regression model to compare with the advanced models. Next, we added more complexity to the model by growing and pruning decision tree regression models to predict avocado price. Finally, we used a random forest to reduce the variance to get a more accurate prediction.
+
+# Model Fits
+
+## Preparation
+
+The dataset is split into training and test set with the following code. The training set has 14,599 observations, and the test set has 4,650 observations. We will evaluate model performance by examining fit features to predict avocado price (RMSE, MAE, and R-squared).
+
+```{r train-test-split, echo=TRUE}
+require(recipes)
+loc <- sample(1:nrow(df), round(nrow(df) * 0.8))
+df_train  <- df[loc, ]
+df_test  <- df[-loc, ]
+
+#dim(df_train)
+#dim(df_test)
+
+```
+
+## Model 1: Linear Regression Model with Cross Validation
+
+To obtain a general understanding of how our predictor variables fit our data, we first fitted a linear regression model without regularization. The equation generated by the linear model is then applied to predict outcome of new unseen data. Our criteria for evaluation of model performance will be the root mean square error (RMSE). We used 10-fold cross validation to determine the optimal value for the complexity penalization factor, alpha.
+
+```{r recipe-linear-model-cross-validated}
+
+# Randomly shuffle the data
+
+set.seed(2379439) # for reproducibility
+
+df_train = df_train[sample(nrow(df_train)),]
+
+# Create 10 folds with equal size
+
+folds = cut(seq(1,nrow(df_train)),breaks=10,labels=FALSE)
+
+# Create the list for each fold 
+      
+my.indices <- vector('list',10)
+    
+    for(i in 1:10){
+        my.indices[[i]] <- which(folds!=i)
+    }
+
+cv <- trainControl(method = "cv",
+                   index  = my.indices)
+
+
+
+recipe <- recipe(average_price ~ ., df) %>%  
+    step_novel(all_nominal()) %>%
+    step_unknown(all_nominal()) %>%
+    step_zv(all_predictors()) %>%
+    step_normalize(all_numeric(), -all_outcomes(), -has_role("type")) %>%
+    step_BoxCox(all_numeric(), -all_outcomes(), -has_role("type")) %>%
+    step_impute_median(all_numeric(), -all_outcomes(), -has_role("type")) %>%
+    step_dummy(all_nominal(), -has_role("type"), one_hot = TRUE) %>%
+    step_zv(all_predictors())
+
+
+mod <- caret::train(recipe, 
+                          data      = df_train, 
+                          method    = "lm", 
+                          trControl = cv)
+
+mod$results
+
+predicted_te <- predict(mod, df_test)
+
+#plot(predicted_tr)
+
+rsq_te <- cor(df_test$average_price,predicted_te)^2
+#rsq_te
+
+mae_te <- mean(abs(df_test$average_price - predicted_te))
+#mae_te
+
+rmse_te <- sqrt(mean((df_test$average_price - predicted_te)^2))
+#rmse_te
+
+```
+
+## Model 2: Decision Trees
+
+Next, we fitted decision tree regression model with cross validation to get a better estimate of the generalization error on new unseen data..
+
+```{r decision-tree}
+require(rpart)
+getModelInfo()$rpart$parameters
+
+grid <- data.frame(cp=seq(0,0.02,.001))
+
+caret_avo <- caret::train(recipe,
+                            data      = df_train,
+                            method    = 'rpart',
+                            tuneGrid  = grid,
+                            trControl = cv,
+                            control   = list(minsplit=5,
+                                             minbucket = 2,
+                                             maxdepth = 60))
+#plot cp
+plot(caret_avo)
+
+caret_avo$bestTune
+
+predicted_te <- predict(caret_avo, df_test) %>% as.numeric()
+
+rpartrsq <- cor(df_test$average_price, predicted_te)^2
+
+rpartrmse <- sqrt(mean((df_test$average_price - predicted_te)^2))
+
+rpartmae <- mean(abs(df_test$average_price - predicted_te))
+
+```
+
+We examined the complexity parameters for the model and found that date sold and total volume sold were the most important factors as predictors for average avocado price.
+
+```{r vip-importance}
+require(vip)
+
+vip(caret_avo, 
+    num_features = 20, 
+    geom = "point") + 
+  theme_minimal()
+```
+
+## Model 3: Random Forest
+
+Finally, we fitted a random forest regression model. According to the random forest regression, the top predictor of avocado prices is type (i.e. whether the avocado is organic or conventional). This result aligned with our expectations, as our preliminary data analyses depicted differences in distributions between organic and conventional avocado prices.
+
+```{r random-forest, warning = FALSE}
+grid <- expand.grid(mtry = 25, splitrule='variance', min.node.size=2)
+grid
+
+random <- caret::train(recipe,
+                        data      = df_train,
+                        method    = 'ranger',
+                        trControl = cv,
+                        tuneGrid  = grid,
+                        num.trees = 500,
+                        max.depth = 60)
+
+predicted_random <- predict(random, newdata = df_test)
+
+head(predicted_random)
+
+random_rmse <- sqrt(mean((df_test$average_price - predicted_random)^2))
+
+random_mae <- mean(abs(df_test$average_price - predicted_random))
+
+random_rsq <- cor(df_test$average_price, predicted_random)^2
+
+
+```
+
+## Comparing Models
+
+Examining the predictions we can see that the random forest model outperformed the linear and decision tree models. This is because it has the highest R^2^ and the least error. Thus, we can assume that random forest models can be trusted to predict avocado prices.
+
+```{r model-table}
+Model <- c('Linear Regression', 'Decision Trees', 'Random Forest')
+RMSE <- c(rmse_te, rpartrmse, random_rmse)
+MAE <- c(mae_te, rpartmae, random_mae)
+Rsquare <- c(rsq_te, rpartrsq, random_rsq)
+summary_df <- data.frame(Model,Rsquare, RMSE, MAE )
+summary_df %>% kable()
+```
+
+# Data Visualization
+
+#### Figure 1: Avocado Prices and total volume sold by type with regression lines
+
+We examined our variables of interest visually with several plots. First we log-transformed the total volume sold to examine its relationship with average price. We can see that more conventional type avocados were sold at a lower price than organic avocados.
+
+```{r}
+avocado %>% 
+	mutate(total_volume = log(total_volume)) %>% 
+ggplot(aes(total_volume, average_price, group = type, color = type)) +
+	geom_smooth(method = "lm", color = "black", size=0.5) +
+	geom_point(alpha = .2) +
+scale_color_manual(values = c("#356211","#FFC324")) +
+	labs(
+    x = 'Total volume sold (log-transformed)',
+    y = 'Average price',
+    title = "Relationship between avocado prices and total volume sold",
+    subtitle = "by coventional vs. organic type"
+  ) +
+scale_y_continuous(breaks = seq(0, 3, 0.2), labels = scales::dollar)
+```
+
+#### Figure 2: Distribution of avocado prices by type
+
+```{r data-viz-dist}
+
+ggplot(avocado_total ,aes(x = average_price, fill = type)) +
+  geom_density(alpha = 0.8) +
+  geom_vline(xintercept = 1.4, linetype = "dashed") +
+scale_x_continuous(breaks = seq(0, 3, 0.2), labels = scales::dollar) +
+scale_fill_manual(values = c("#356211","#FFC324")) +
+theme_minimal() +
+labs(title = "Distribution of Organic & Conventional Avocado Prices",
+       x = "Average Price",
+       y = "",
+       fill = "Avocado Type",
+       caption = "Data: Hass Avocado Board") +
+theme(panel.grid.minor = element_blank(),
+     plot.title = element_text(size = 18, hjust = 0.5),
+     legend.position = c(0.8, 0.8),
+     axis.text.y = element_blank())
+
+
+```
+
+#### Figure 3: Regional avocado prices change over time
+
+```{r data-viz-price-regional}
+avocado_regional %>%
+  group_by(region) %>%
+  ggplot(aes(date, average_price, color = year, group = region)) +
+  geom_line() +
+scale_y_continuous(labels = scales::dollar) +
+  scale_color_gradientn(colors = terrain.colors(10))+
+labs(title = "Average Price of avocados by region",
+    x = "",
+    y = "Average Price",
+    caption = "Data: Haas Avocado Board") +
+theme(panel.grid.minor = element_blank(),
+     plot.title = element_text(size = 16, hjust = 0.5),
+     legend.title = element_text(size = 12),
+     legend.text = element_text(size = 10),
+     legend.position = "none") +
+	facet_wrap(~region)
+```
+
+#### Figure 4: Boxplots of average price of avocados by region compared with total US
+
+```{r data-viz-price-by-type}
+ggplot(avocado_regional, aes(region, average_price, fill = type)) +
+    geom_boxplot() +
+scale_y_continuous(labels = scales::dollar) +
+scale_fill_manual(values = c("#356211", "#ffc324")) +
+labs(title = "Average Price of avocados",
+    x = "",
+    y = "Average Price",
+    fill = "Type",
+    caption = "Data: Haas Avocado Board") +
+theme(panel.grid.minor = element_blank(),
+     plot.title = element_text(size = 16, hjust = 0.5),
+     legend.title = element_text(size = 12),
+     legend.text = element_text(size = 10),
+     legend.position = "bottom")
+
+```
+
+# Discussion
+
+## Conclusion
+
+We optimized three models to predict average avocado prices and we found that the test scores for our predictive models were overall high. For the random forest regression model, the total variance explained was 91% and the decision tree model explained 69% of the variance.
+
+We discovered some interesting findings from the models. The decision tree regression model predicted that date sold and total volume sold are the most important features for predicting avocado price.
+
+The region where the avocado was sold was an important feature in the pricing of avocados. For instance, regions such as Baltimore/Washington and Houston were the third and fourth most important predictors of average avocado price.
+
+# References
+
+---
+nocite: '@*'
+---
