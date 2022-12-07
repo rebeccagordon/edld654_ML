@@ -6,14 +6,14 @@ Across the entire United States, avocados are being sold everyday in high volume
 We will be answering the research question: What is the strongest predictor of avocado prices in the United States? Thus, our goal is to find the feature in the data that most strongly predicts the price of avocados in the United States.
 
 Variables:
-- Date - The date of the observation
-- AveragePrice - the average price of a single avocado
+- date - The date of the observation
+- average_price - the average price of a single avocado
 - type - conventional or organic
-- year - the year
-- Region - the city or region of the observation
-- Total Volume - Total number of avocados sold
+- year - the year of the observation
+- region - the city or region of the observation
+- total_volume - Total number of avocados sold
 
-Models Used for Fitting
+Models Used for Fitting:
 - Multiple Linear Regression
 - Decision Tree Regression
 - Random Forest Regression
